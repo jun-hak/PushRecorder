@@ -2,7 +2,6 @@ package com.example.pushrecorder.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import java.util.Date
 
 @Entity(tableName = "notifications")
 data class NotificationEntity(
@@ -11,12 +10,23 @@ data class NotificationEntity(
     val packageName: String,
     val title: String,
     val text: String,
-    val timestamp: Date,
-    val status: NotificationStatus
+    val timestamp: Long,
+    val status: NotificationStatus,
+    val flags: Int = 0,
+    val hasActions: Boolean = false,
+    val removalReason: RemovalReason = RemovalReason.UNKNOWN,
+    val timeToRemoval: Long = 0 // milliseconds
 )
 
 enum class NotificationStatus {
     POSTED,
     REMOVED,
     CLICKED
+}
+
+enum class RemovalReason {
+    UNKNOWN,
+    USER_CLICKED,
+    USER_DISMISSED,
+    AUTO_REMOVED
 } 
