@@ -1,7 +1,9 @@
 package com.example.pushrecorder.di
 
 import android.content.Context
+import com.example.pushrecorder.data.AppRecordDao
 import com.example.pushrecorder.data.AppDatabase
+import com.example.pushrecorder.data.NotificationEventJournalDao
 import com.example.pushrecorder.data.NotificationDao
 import dagger.Module
 import dagger.Provides
@@ -27,4 +29,16 @@ object DatabaseModule {
     fun provideNotificationDao(database: AppDatabase): NotificationDao {
         return database.notificationDao()
     }
-} 
+
+    @Provides
+    @Singleton
+    fun provideAppRecordDao(database: AppDatabase): AppRecordDao {
+        return database.appRecordDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideNotificationEventJournalDao(database: AppDatabase): NotificationEventJournalDao {
+        return database.notificationEventJournalDao()
+    }
+}

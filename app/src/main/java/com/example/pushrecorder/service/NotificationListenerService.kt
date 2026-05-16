@@ -1,133 +1,198 @@
 package com.example.pushrecorder.service
 
-import android.app.Notification
-import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService as AndroidNotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
-import com.example.pushrecorder.data.NotificationDao
-import com.example.pushrecorder.data.NotificationEntity
-import com.example.pushrecorder.data.NotificationStatus
-import com.example.pushrecorder.data.RemovalReason
+import com.example.pushrecorder.appinfo.AppRegistryRepository
+import com.example.pushrecorder.data.NotificationRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.SupervisorJob
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class NotificationListenerService : NotificationListenerService() {
+class NotificationListenerService : AndroidNotificationListenerService() {
     companion object {
         private const val TAG = "NotificationListener"
-        private const val AUTO_REMOVAL_THRESHOLD = 5000L // 5초 이내 제거는 자동 제거로 간주
-        private const val CLICK_THRESHOLD = 2000L // 2초 이내 제거는 클릭으로 간주
     }
 
     @Inject
-    lateinit var notificationDao: NotificationDao
+    lateinit var notificationRepository: NotificationRepository
 
-    private val scope = CoroutineScope(Dispatchers.IO)
-    private val activeNotifications = ConcurrentHashMap<String, NotificationEntity>()
+    @Inject
+    lateinit var appRegistryRepository: AppRegistryRepository
+
+    @Inject
+    lateinit var listenerStatusRepository: NotificationListenerStatusRepository
+
+    @Inject
+    lateinit var notificationEventProcessor: NotificationEventProcessor
+
+    @Inject
+    lateinit var notificationEventJournalRepository: NotificationEventJournalRepository
+
+    private val serviceJob = SupervisorJob()
+    private val scope = CoroutineScope(serviceJob + Dispatchers.IO)
+    private val shutdownCompleted = AtomicBoolean(false)
+    private val eventQueue: NotificationProcessingQueue by lazy {
+        NotificationProcessingQueue(
+            scope = scope,
+            processEvent = { event -> processQueuedEvent(event) },
+            onQueued = listenerStatusRepository::markEventQueued,
+            onProcessed = listenerStatusRepository::markEventProcessed,
+            onFailed = { event, error ->
+                val message = "Failed to process ${event.eventName()}"
+                listenerStatusRepository.markEventFailed(message)
+                Log.e(TAG, "Failed to process notification event: $event", error)
+            },
+            onRejected = { event, message, error ->
+                listenerStatusRepository.markError(message)
+                Log.e(TAG, "Rejected notification event: $event", error)
+            }
+        )
+    }
+    private val durableEventEnqueuer: NotificationDurableEventEnqueuer by lazy {
+        NotificationDurableEventEnqueuer(
+            journalRepository = notificationEventJournalRepository,
+            enqueueCommand = { event -> eventQueue.enqueue(event) },
+            statusRecorder = listenerStatusRepository,
+            logError = { message, error ->
+                Log.e(TAG, message, error)
+            }
+        )
+    }
+    private val listenerAdapter: NotificationListenerAdapter by lazy {
+        NotificationListenerAdapter(
+            enqueueEvent = { event -> enqueue(event) }
+        )
+    }
+    private val notificationReconciler: NotificationReconciler by lazy {
+        NotificationReconciler(
+            notificationRepository = notificationRepository,
+            notificationEventProcessor = notificationEventProcessor,
+            statusRecorder = listenerStatusRepository,
+            readActiveNotifications = {
+                activeNotifications?.map { notification ->
+                    notification.toNotificationCapture()
+                }
+            },
+            enqueueReconcile = { event ->
+                enqueue(event)
+            },
+            scope = scope,
+            isAcceptingEvents = { eventQueue.isAcceptingEvents }
+        )
+    }
+    private val listenerConnectionAdapter: NotificationListenerConnectionAdapter by lazy {
+        NotificationListenerConnectionAdapter(
+            statusRecorder = listenerStatusRepository,
+            reconcileScheduler = notificationReconciler
+        )
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        listenerStatusRepository.markServiceStarted()
+        eventQueue.start()
+        durableEventEnqueuer.replayPendingEvents()
+        cleanupOldNotifications()
+        syncInstalledApps()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        val packageName = sbn.packageName
-        val notification = sbn.notification
-        val extras = notification.extras
-        
-        val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
-        val text = extras.getString(Notification.EXTRA_TEXT) ?: ""
-        
-        Log.d(TAG, "Notification Posted - Package: $packageName, Title: $title, Text: $text")
-        
-        val currentTime = System.currentTimeMillis()
-        val notificationEntity = NotificationEntity(
-            packageName = packageName,
-            title = title,
-            text = text,
-            timestamp = currentTime,
-            status = NotificationStatus.POSTED,
-            flags = notification.flags,
-            hasActions = notification.actions?.isNotEmpty() == true
-        )
-        
-        // 활성 노티피케이션 목록에 추가
-        activeNotifications[sbn.key] = notificationEntity
-        
-        scope.launch {
-            notificationDao.insert(notificationEntity)
-        }
+        listenerAdapter.onNotificationPosted(sbn.toNotificationCapture())
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        val packageName = sbn.packageName
-        val notification = sbn.notification
-        val extras = notification.extras
-        
-        val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
-        val text = extras.getString(Notification.EXTRA_TEXT) ?: ""
-        
-        Log.d(TAG, "Notification Removed - Package: $packageName, Title: $title, Text: $text")
-        
-        // 원본 노티피케이션 정보 가져오기
-        val originalNotification = activeNotifications[sbn.key]
-        val currentTime = System.currentTimeMillis()
-        val timeToRemoval = originalNotification?.let {
-            currentTime - it.timestamp
-        } ?: 0L
+        listenerAdapter.onNotificationRemoved(sbn.toNotificationCapture(), systemReason = null)
+    }
 
-        // 제거 이유 분석
-        val removalReason = analyzeRemovalReason(
-            notification = notification,
-            timeToRemoval = timeToRemoval,
-            hasActions = originalNotification?.hasActions ?: false
-        )
+    override fun onNotificationRemoved(
+        sbn: StatusBarNotification,
+        rankingMap: AndroidNotificationListenerService.RankingMap,
+        reason: Int
+    ) {
+        listenerAdapter.onNotificationRemoved(sbn.toNotificationCapture(), systemReason = reason)
+    }
 
-        // 상태 결정
-        val status = when (removalReason) {
-            RemovalReason.USER_CLICKED -> NotificationStatus.CLICKED
-            else -> NotificationStatus.REMOVED
+    override fun onDestroy() {
+        listenerStatusRepository.markServiceStopped()
+        eventQueue.closeAndDrain {
+            completeShutdownIfDrained()
         }
-        
-        val notificationEntity = NotificationEntity(
-            packageName = packageName,
-            title = title,
-            text = text,
-            timestamp = currentTime,
-            status = status,
-            flags = notification.flags,
-            hasActions = notification.actions?.isNotEmpty() == true,
-            removalReason = removalReason,
-            timeToRemoval = timeToRemoval
-        )
-        
-        // 활성 노티피케이션 목록에서 제거
-        activeNotifications.remove(sbn.key)
-        
+        super.onDestroy()
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        listenerConnectionAdapter.onListenerConnected()
+    }
+
+    override fun onListenerDisconnected() {
+        listenerConnectionAdapter.onListenerDisconnected()
+        super.onListenerDisconnected()
+    }
+
+    private fun completeShutdownIfDrained() {
+        if (shutdownCompleted.compareAndSet(false, true)) {
+            serviceJob.cancel()
+        }
+    }
+
+    private suspend fun processEvent(event: NotificationProcessingCommand) {
+        when (event) {
+            is NotificationProcessingCommand.Posted,
+            is NotificationProcessingCommand.Removed -> processForegroundEvent(event)
+            is NotificationProcessingCommand.Reconcile -> notificationReconciler.processReconcile(event)
+        }
+    }
+
+    private suspend fun processQueuedEvent(event: NotificationProcessingCommand) {
+        processEvent(event)
+        notificationEventJournalRepository.acknowledge(event)
+    }
+
+    private suspend fun processForegroundEvent(event: NotificationProcessingCommand) {
+        when (val result = notificationEventProcessor.process(event)) {
+            is NotificationProcessingResult.Posted -> {
+                listenerStatusRepository.markPosted(result.observedAt)
+            }
+            is NotificationProcessingResult.Removed -> {
+                listenerStatusRepository.markRemoved(result.removedAt)
+            }
+        }
+    }
+
+    private fun enqueue(event: NotificationProcessingCommand) {
+        durableEventEnqueuer.enqueue(event)
+    }
+
+    private fun cleanupOldNotifications() {
         scope.launch {
-            notificationDao.insert(notificationEntity)
+            runCatching {
+                notificationRepository.deleteExpiredNotifications()
+            }.onFailure { error ->
+                listenerStatusRepository.markError("Failed to delete expired notifications")
+                Log.e(TAG, "Failed to delete expired notifications", error)
+            }
         }
     }
 
-    private fun analyzeRemovalReason(
-        notification: Notification,
-        timeToRemoval: Long,
-        hasActions: Boolean
-    ): RemovalReason {
-        // 1. 자동 제거 플래그 확인
-        if (notification.flags and Notification.FLAG_AUTO_CANCEL != 0) {
-            return RemovalReason.AUTO_REMOVED
-        }
-
-        // 2. 시간 기반 분석
-        return when {
-            // 매우 빠른 제거는 클릭으로 간주
-            timeToRemoval <= CLICK_THRESHOLD -> RemovalReason.USER_CLICKED
-            // 짧은 시간 내 제거는 자동 제거로 간주
-            timeToRemoval <= AUTO_REMOVAL_THRESHOLD -> RemovalReason.AUTO_REMOVED
-            // 액션이 있는 노티피케이션의 경우 사용자 상호작용으로 간주
-            hasActions -> RemovalReason.USER_CLICKED
-            // 그 외의 경우 사용자가 직접 제거한 것으로 간주
-            else -> RemovalReason.USER_DISMISSED
+    private fun syncInstalledApps() {
+        scope.launch {
+            runCatching {
+                appRegistryRepository.syncInstalledApps()
+            }.onSuccess { syncedCount ->
+                listenerStatusRepository.markInstalledAppSync(syncedCount)
+            }.onFailure { error ->
+                listenerStatusRepository.markError("Failed to sync installed apps")
+                Log.e(TAG, "Failed to sync installed apps", error)
+            }
         }
     }
-} 
+
+}

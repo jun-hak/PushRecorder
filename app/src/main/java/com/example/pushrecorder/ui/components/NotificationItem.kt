@@ -14,12 +14,11 @@ import java.util.*
 
 @Composable
 fun NotificationItem(
-    notification: NotificationEntity,
-    showDetails: Boolean = true
+    notification: NotificationEntity
 ) {
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val colorScheme = MaterialTheme.colorScheme
-    
+
     val containerColor = remember(notification.status, notification.removalReason, colorScheme) {
         when (notification.status) {
             NotificationStatus.POSTED -> colorScheme.primaryContainer.copy(alpha = 0.7f)
@@ -31,7 +30,7 @@ fun NotificationItem(
             }
         }
     }
-    
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = containerColor),
@@ -45,6 +44,11 @@ fun NotificationItem(
                 .padding(16.dp)
         ) {
             Text(
+                text = notification.appLabel,
+                style = MaterialTheme.typography.labelMedium
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
                 text = notification.title,
                 style = MaterialTheme.typography.titleMedium
             )
@@ -53,46 +57,59 @@ fun NotificationItem(
                 text = notification.text,
                 style = MaterialTheme.typography.bodyMedium
             )
-            
-            if (showDetails) {
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "상태: ${notification.status}",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text(
-                        text = "시간: ${dateFormat.format(notification.timestamp)}",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                
-                if (notification.status != NotificationStatus.POSTED) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "제거 이유: ${notification.removalReason}",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text(
-                        text = "제거까지 걸린 시간: ${notification.timeToRemoval}ms",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(4.dp))
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Text(
-                    text = "플래그: ${formatFlags(notification.flags)}",
+                    text = "상태: ${formatStatus(notification.status)}",
                     style = MaterialTheme.typography.labelSmall
                 )
                 Text(
-                    text = "액션 존재: ${notification.hasActions}",
+                    text = "기록: ${dateFormat.format(notification.observedAt)}",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
+
+            Text(
+                text = "앱 패키지: ${notification.packageName}",
+                style = MaterialTheme.typography.labelSmall
+            )
+            Text(
+                text = "앱 정보 스냅샷: ${formatBoolean(notification.appInfoResolved)}",
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            if (notification.status != NotificationStatus.POSTED) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "제거 이유: ${formatRemovalReason(notification.removalReason)}",
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = "제거까지 걸린 시간: ${notification.timeToRemoval}ms",
+                    style = MaterialTheme.typography.labelSmall
+                )
+                if (notification.removedAt > 0) {
+                    Text(
+                        text = "제거: ${dateFormat.format(notification.removedAt)}",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "플래그: ${formatFlags(notification.flags)}",
+                style = MaterialTheme.typography.labelSmall
+            )
+            Text(
+                text = "액션 존재: ${formatBoolean(notification.hasActions)}",
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
@@ -102,11 +119,31 @@ private fun formatFlags(flags: Int): String {
     if (flags and Notification.FLAG_AUTO_CANCEL != 0) flagList.add("AUTO_CANCEL")
     if (flags and Notification.FLAG_FOREGROUND_SERVICE != 0) flagList.add("FOREGROUND_SERVICE")
     if (flags and Notification.FLAG_GROUP_SUMMARY != 0) flagList.add("GROUP_SUMMARY")
-    if (flags and Notification.FLAG_HIGH_PRIORITY != 0) flagList.add("HIGH_PRIORITY")
     if (flags and Notification.FLAG_INSISTENT != 0) flagList.add("INSISTENT")
     if (flags and Notification.FLAG_LOCAL_ONLY != 0) flagList.add("LOCAL_ONLY")
     if (flags and Notification.FLAG_NO_CLEAR != 0) flagList.add("NO_CLEAR")
     if (flags and Notification.FLAG_ONGOING_EVENT != 0) flagList.add("ONGOING_EVENT")
     if (flags and Notification.FLAG_ONLY_ALERT_ONCE != 0) flagList.add("ONLY_ALERT_ONCE")
-    return flagList.joinToString(", ")
-} 
+    return flagList.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "없음"
+}
+
+private fun formatStatus(status: NotificationStatus): String {
+    return when (status) {
+        NotificationStatus.POSTED -> "수신됨"
+        NotificationStatus.REMOVED -> "제거됨"
+        NotificationStatus.CLICKED -> "클릭됨"
+    }
+}
+
+private fun formatRemovalReason(reason: RemovalReason): String {
+    return when (reason) {
+        RemovalReason.UNKNOWN -> "알 수 없음"
+        RemovalReason.USER_CLICKED -> "사용자 클릭"
+        RemovalReason.USER_DISMISSED -> "사용자 직접 제거"
+        RemovalReason.AUTO_REMOVED -> "앱/시스템 제거"
+    }
+}
+
+private fun formatBoolean(value: Boolean): String {
+    return if (value) "있음" else "없음"
+}

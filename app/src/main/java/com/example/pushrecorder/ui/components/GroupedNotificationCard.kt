@@ -1,40 +1,25 @@
 package com.example.pushrecorder.ui.components
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.pushrecorder.data.NotificationEntity
+import com.example.pushrecorder.appinfo.AppDisplayInfo
+import com.example.pushrecorder.data.NotificationGroupSummary
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupedNotificationCard(
-    packageName: String,
-    notifications: List<NotificationEntity>
+    group: NotificationGroupSummary,
+    appInfo: AppDisplayInfo,
+    onClick: () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    
-    val latestNotification = remember(notifications) {
-        notifications.maxByOrNull { it.timestamp }
-    }
-    
-    val remainingNotifications = remember(notifications) {
-        notifications.sortedByDescending { it.timestamp }
-            .drop(1)
-    }
-    
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(
             defaultElevation = 4.dp
         )
@@ -49,54 +34,22 @@ fun GroupedNotificationCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = packageName,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                IconButton(onClick = { expanded = !expanded }) {
-                    Icon(
-                        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (expanded) "접기" else "펼치기"
-                    )
-                }
-            }
-            
-            if (latestNotification != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                NotificationItem(
-                    notification = latestNotification,
-                    showDetails = true
-                )
-            }
-            
-            if (remainingNotifications.isNotEmpty()) {
-                AnimatedVisibility(
-                    visible = expanded,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 300.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            remainingNotifications.forEach { notification ->
-                                NotificationItem(
-                                    notification = notification,
-                                    showDetails = true
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                        }
+                AppIdentity(
+                    appInfo = appInfo,
+                    modifier = Modifier.weight(1f),
+                    supportingText = "저장된 푸시 ${group.notificationCount}개",
+                    trailing = {
+                        Text(
+                            text = "보기",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
-                }
+                )
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            NotificationItem(notification = group.latestNotification)
         }
     }
-} 
+}
