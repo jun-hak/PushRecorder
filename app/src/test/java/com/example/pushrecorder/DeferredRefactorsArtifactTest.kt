@@ -21,6 +21,21 @@ class DeferredRefactorsArtifactTest {
             "Deferred refactors artifact should document phase 1 behavior preservation.",
             artifact.contains("Phase 1 keeps notification capture behavior stable")
         )
+        assertTrue(
+            "Deferred refactors artifact should document two-row notification lifecycle storage.",
+            artifact.contains("A posted callback writes a `POSTED` row") &&
+                artifact.contains("matching removed callback writes a later terminal row")
+        )
+        assertTrue(
+            "Deferred refactors artifact should explain high-volume row growth.",
+            artifact.contains("10,000 complete notification lifecycles") &&
+                artifact.contains("20,000 notification rows")
+        )
+        assertTrue(
+            "Deferred refactors artifact should document the future single-row model tradeoff.",
+            artifact.contains("A future single-row lifecycle model") &&
+                artifact.contains("compatibility plan for already-recorded POSTED/REMOVED rows")
+        )
 
         val items = artifact.lineSequence()
             .map(String::trim)

@@ -14,8 +14,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AppRecordEntity::class,
         NotificationEventJournalEntity::class
     ],
-    version = 7,
-    exportSchema = false
+    version = 11,
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -203,13 +203,102 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_notificationKey_id
+                    ON notifications(notificationKey, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_notificationKey_status_id
+                    ON notifications(notificationKey, status, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_packageName_id
+                    ON notifications(packageName, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_status_notificationKey_id
+                    ON notifications(status, notificationKey, id)
+                """)
+            }
+        }
+
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_packageName_observedAt_id
+                    ON notifications(packageName, observedAt, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_packageName_status_notificationKey_id
+                    ON notifications(packageName, status, notificationKey, id)
+                """)
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_notificationKey_id
+                    ON notifications(notificationKey, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_notificationKey_status_id
+                    ON notifications(notificationKey, status, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_packageName_observedAt_id
+                    ON notifications(packageName, observedAt, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_packageName_id
+                    ON notifications(packageName, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_packageName_status_notificationKey_id
+                    ON notifications(packageName, status, notificationKey, id)
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notifications_status_notificationKey_id
+                    ON notifications(status, notificationKey, id)
+                """)
+                database.execSQL("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS index_notifications_eventJournalId
+                    ON notifications(eventJournalId)
+                """)
+            }
+        }
+
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE notification_event_journal ADD COLUMN retryCount INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE notification_event_journal ADD COLUMN lastAttemptAt INTEGER")
+                database.execSQL("ALTER TABLE notification_event_journal ADD COLUMN nextAttemptAt INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE notification_event_journal ADD COLUMN lastError TEXT")
+                database.execSQL("""
+                    UPDATE notification_event_journal
+                    SET nextAttemptAt = createdAt
+                    WHERE nextAttemptAt = 0
+                """)
+                database.execSQL("""
+                    CREATE INDEX IF NOT EXISTS index_notification_event_journal_nextAttemptAt_id
+                    ON notification_event_journal(nextAttemptAt, id)
+                """)
+            }
+        }
+
         val MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
             MIGRATION_4_5,
             MIGRATION_5_6,
-            MIGRATION_6_7
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11
         )
 
         fun getDatabase(context: Context): AppDatabase {

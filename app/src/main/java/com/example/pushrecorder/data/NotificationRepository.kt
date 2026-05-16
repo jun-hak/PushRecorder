@@ -10,12 +10,17 @@ import javax.inject.Singleton
 @Singleton
 class NotificationRepository internal constructor(
     private val notificationDao: NotificationDao,
-    private val currentTimeMillis: () -> Long
+    private val currentTimeMillis: () -> Long = System::currentTimeMillis,
+    private val retentionPolicy: NotificationRetentionPolicy = NotificationRetentionPolicy.Default
 ) {
     @Inject
-    constructor(notificationDao: NotificationDao) : this(
+    constructor(
+        notificationDao: NotificationDao,
+        retentionPolicy: NotificationRetentionPolicy
+    ) : this(
         notificationDao = notificationDao,
-        currentTimeMillis = System::currentTimeMillis
+        currentTimeMillis = System::currentTimeMillis,
+        retentionPolicy = retentionPolicy
     )
 
     fun pagedNotifications(query: String): Flow<PagingData<NotificationEntity>> {
@@ -53,12 +58,18 @@ class NotificationRepository internal constructor(
         capture: NotificationCapture,
         eventJournalId: Long? = null
     ) {
-        notificationDao.insert(
+        val insertedId = notificationDao.insert(
             capture.toEntity(
                 status = NotificationStatus.POSTED,
                 eventJournalId = eventJournalId
             )
         )
+        if (insertedId <= 0L && eventJournalId != null && notificationDao.hasEventJournalId(eventJournalId)) {
+            return
+        }
+        check(insertedId > 0L) {
+            "Failed to persist posted notification event for ${capture.notificationKey}"
+        }
     }
 
     suspend fun recordRemoved(
@@ -69,7 +80,7 @@ class NotificationRepository internal constructor(
         removedAt: Long,
         eventJournalId: Long? = null
     ) {
-        notificationDao.insert(
+        val insertedId = notificationDao.insert(
             capture.toEntity(
                 status = status,
                 removalReason = removalReason,
@@ -78,6 +89,12 @@ class NotificationRepository internal constructor(
                 eventJournalId = eventJournalId
             )
         )
+        if (insertedId <= 0L && eventJournalId != null && notificationDao.hasEventJournalId(eventJournalId)) {
+            return
+        }
+        check(insertedId > 0L) {
+            "Failed to persist removed notification event for ${capture.notificationKey}"
+        }
     }
 
     suspend fun hasTerminalEventForLatestLifecycle(notificationKey: String): Boolean {
@@ -89,9 +106,13 @@ class NotificationRepository internal constructor(
     }
 
     suspend fun deleteExpiredNotifications(): Int {
-        return notificationDao.deleteOlderThan(
-            NotificationRetentionPolicy.cutoffTimestamp(currentTimeMillis())
-        )
+        val ageDeleted = retentionPolicy.cutoffTimestamp(currentTimeMillis())
+            ?.let { cutoffTimestamp -> notificationDao.deleteOlderThan(cutoffTimestamp) }
+            ?: 0
+        val countDeleted = retentionPolicy.strictestCountLimit
+            ?.let { maxRows -> notificationDao.trimToNewest(maxRows) }
+            ?: 0
+        return ageDeleted + countDeleted
     }
 
     suspend fun reconcileActiveNotifications(
@@ -120,10 +141,15 @@ class NotificationRepository internal constructor(
         targetPackageName: String?,
         activeSnapshotCapturedAt: Long
     ): List<NotificationEntity> {
-        return notificationDao.getActiveNotifications()
+        val activeRows = if (targetPackageName == null) {
+            notificationDao.getActiveNotifications()
+        } else {
+            notificationDao.getActiveNotificationsByPackage(targetPackageName)
+        }
+
+        return activeRows
             .filter { notification ->
-                (targetPackageName == null || notification.packageName == targetPackageName) &&
-                    notification.observedAt <= activeSnapshotCapturedAt
+                notification.observedAt <= activeSnapshotCapturedAt
             }
     }
 

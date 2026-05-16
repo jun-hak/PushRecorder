@@ -23,7 +23,6 @@ class NotificationCaptureProcessor @Inject constructor(
             appInfoResolved = appSnapshot.isResolved
         )
 
-        activeSnapshots.put(normalizedCapture)
         notificationRepository.recordPosted(
             capture = normalizedCapture,
             eventJournalId = eventJournalId
@@ -32,6 +31,7 @@ class NotificationCaptureProcessor @Inject constructor(
             packageName = normalizedCapture.packageName,
             observedAt = normalizedCapture.observedAt
         )
+        activeSnapshots.put(normalizedCapture)
 
         return AcceptedNotificationCaptureResult(
             observedAt = normalizedCapture.observedAt,

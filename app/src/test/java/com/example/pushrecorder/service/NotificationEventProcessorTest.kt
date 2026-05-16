@@ -15,7 +15,9 @@ import com.example.pushrecorder.data.notificationCapture
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class NotificationEventProcessorTest {
@@ -138,6 +140,34 @@ class NotificationEventProcessorTest {
         assertEquals(1, notificationDao.notifications.size)
         assertEquals("already recorded", notificationDao.notifications.single().title)
         assertEquals(null, processor.activeSnapshot("journal-post"))
+    }
+
+    @Test
+    fun processPostedCommand_whenDurableInsertIsRejected_doesNotAcceptActiveSnapshot() = runTest {
+        val processor = NotificationEventProcessor(
+            notificationRepository = notificationRepository,
+            appRegistryRepository = appRegistryRepository
+        )
+        notificationDao.nextInsertResult = -1L
+
+        try {
+            processPosted(
+                processor,
+                NotificationProcessingCommand.Posted(
+                    capture = notificationCapture(
+                        notificationKey = "rejected-post",
+                        title = "not durable"
+                    ),
+                    eventJournalId = 77L
+                )
+            )
+            fail("Expected rejected Room insert to fail posted processing")
+        } catch (error: IllegalStateException) {
+            assertTrue(error.message?.contains("Failed to persist posted notification event") == true)
+        }
+
+        assertEquals(emptyList<NotificationEntity>(), notificationDao.notifications)
+        assertNull(processor.activeSnapshot("rejected-post"))
     }
 
     @Test
@@ -440,6 +470,44 @@ class NotificationEventProcessorTest {
             notificationDao.notifications.map(NotificationEntity::title)
         )
         assertEquals("new posted", notificationRepository.getActiveNotificationByKey("journal-remove")?.title)
+    }
+
+    @Test
+    fun processRemovedCommand_whenDurableInsertIsRejected_keepsActiveSnapshot() = runTest {
+        val processor = NotificationEventProcessor(
+            notificationRepository = notificationRepository,
+            appRegistryRepository = appRegistryRepository,
+            currentTimeMillis = { 7_000L }
+        )
+        processPosted(
+            processor,
+            notificationCapture(
+                notificationKey = "rejected-remove",
+                title = "active before failure",
+                observedAt = 1_000L
+            )
+        )
+        notificationDao.nextInsertResult = -1L
+
+        try {
+            processRemoved(
+                processor,
+                NotificationRemovalCommand(
+                    capture = notificationCapture(
+                        notificationKey = "rejected-remove",
+                        title = "remove not durable",
+                        observedAt = 6_000L
+                    )
+                )
+            )
+            fail("Expected rejected Room insert to fail removed processing")
+        } catch (error: IllegalStateException) {
+            assertTrue(error.message?.contains("Failed to persist removed notification event") == true)
+        }
+
+        assertEquals(1, notificationDao.notifications.size)
+        assertEquals(NotificationStatus.POSTED, notificationDao.notifications.single().status)
+        assertEquals("active before failure", processor.activeSnapshot("rejected-remove")?.title)
     }
 
     private suspend fun processPosted(

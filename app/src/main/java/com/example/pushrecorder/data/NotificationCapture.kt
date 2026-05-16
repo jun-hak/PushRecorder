@@ -22,8 +22,8 @@ data class NotificationCapture(
         return NotificationEntity(
             notificationKey = notificationKey,
             packageName = packageName,
-            title = title,
-            text = text,
+            title = NotificationStorageLimits.limitTitle(title),
+            text = NotificationStorageLimits.limitText(text),
             timestamp = sourcePostTime,
             observedAt = observedAt,
             appLabel = appLabel,

@@ -3,8 +3,12 @@ package com.example.pushrecorder.service
 import android.app.Notification
 import android.os.Bundle
 import android.os.Parcelable
+import com.example.pushrecorder.data.NotificationStorageLimits
 
 object NotificationContentExtractor {
+    const val MAX_STORED_TITLE_LENGTH = NotificationStorageLimits.MAX_STORED_TITLE_LENGTH
+    const val MAX_STORED_TEXT_LENGTH = NotificationStorageLimits.MAX_STORED_TEXT_LENGTH
+
     fun timestamp(
         postTime: Long,
         currentTimeMillis: () -> Long = System::currentTimeMillis
@@ -32,7 +36,7 @@ object NotificationContentExtractor {
             content.bigTitle,
             content.subText,
             content.tickerText
-        )
+        ).let(NotificationStorageLimits::limitTitle)
     }
 
     fun text(notification: Notification): String {
@@ -61,7 +65,7 @@ object NotificationContentExtractor {
             content.infoText,
             content.subText,
             content.tickerText
-        )
+        ).let(NotificationStorageLimits::limitText)
     }
 
     internal data class TitleContent(

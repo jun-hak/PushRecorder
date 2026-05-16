@@ -9,9 +9,20 @@ class FakeNotificationDao : NotificationDao {
     private val syntheticRemovalMutex = Mutex()
 
     val notifications = mutableListOf<NotificationEntity>()
+    var nextInsertResult: Long? = null
+    var beforeInsert: suspend (NotificationEntity) -> Unit = {}
     var lastDeleteCutoffTimestamp: Long? = null
+    var lastTrimMaxRows: Int? = null
+    var activeNotificationsQueryCount = 0
+        private set
+    val activeNotificationsByPackageQueries = mutableListOf<String>()
 
     override suspend fun insert(notification: NotificationEntity): Long {
+        beforeInsert(notification)
+        nextInsertResult?.let { result ->
+            nextInsertResult = null
+            return result
+        }
         if (notification.id != 0L && notifications.any { saved -> saved.id == notification.id }) {
             return -1L
         }
@@ -72,7 +83,14 @@ class FakeNotificationDao : NotificationDao {
     }
 
     override suspend fun getActiveNotifications(): List<NotificationEntity> {
+        activeNotificationsQueryCount += 1
         return activeNotifications()
+    }
+
+    override suspend fun getActiveNotificationsByPackage(packageName: String): List<NotificationEntity> {
+        activeNotificationsByPackageQueries += packageName
+        return activeNotifications()
+            .filter { notification -> notification.packageName == packageName }
     }
 
     override suspend fun deleteOlderThan(cutoffTimestamp: Long): Int {
@@ -84,7 +102,27 @@ class FakeNotificationDao : NotificationDao {
         notifications.removeAll { notification ->
             notification.observedAt < cutoffTimestamp &&
                 notification.id !in activeIds &&
-                !notification.shouldPreserveAsRetainedPostTerminal(cutoffTimestamp)
+                !notification.shouldPreserveAsTerminalForRetainedPosted(cutoffTimestamp) &&
+                !notification.shouldPreserveAsPostedForRetainedTerminal(cutoffTimestamp)
+        }
+        return beforeSize - notifications.size
+    }
+
+    override suspend fun trimToNewest(maxRows: Int): Int {
+        lastTrimMaxRows = maxRows
+        val retainedNewestIds = notifications
+            .sortedByDescending(NotificationEntity::id)
+            .take(maxRows)
+            .mapTo(mutableSetOf()) { notification -> notification.id }
+        val activeIds = activeNotifications().mapTo(mutableSetOf()) { notification ->
+            notification.id
+        }
+        val beforeSize = notifications.size
+        notifications.removeAll { notification ->
+            notification.id !in retainedNewestIds &&
+                notification.id !in activeIds &&
+                !notification.shouldPreserveAsTerminalForRetainedPosted(retainedNewestIds) &&
+                !notification.shouldPreserveAsPostedForRetainedTerminal(retainedNewestIds)
         }
         return beforeSize - notifications.size
     }
@@ -178,7 +216,9 @@ class FakeNotificationDao : NotificationDao {
             .filter { notification -> notification.status == NotificationStatus.POSTED }
     }
 
-    private fun NotificationEntity.shouldPreserveAsRetainedPostTerminal(cutoffTimestamp: Long): Boolean {
+    private fun NotificationEntity.shouldPreserveAsTerminalForRetainedPosted(
+        cutoffTimestamp: Long
+    ): Boolean {
         if (status == NotificationStatus.POSTED) {
             return false
         }
@@ -188,12 +228,83 @@ class FakeNotificationDao : NotificationDao {
                 notification.status == NotificationStatus.POSTED &&
                 notification.observedAt >= cutoffTimestamp &&
                 notification.id < id &&
-                notifications.none { interveningTerminal ->
-                    interveningTerminal.notificationKey == notificationKey &&
-                        interveningTerminal.status != NotificationStatus.POSTED &&
-                        interveningTerminal.id > notification.id &&
-                        interveningTerminal.id < id
-                }
+                hasNoInterveningLifecycleEvent(
+                    notificationKey = notificationKey,
+                    startExclusive = notification.id,
+                    endExclusive = id
+                )
+        }
+    }
+
+    private fun NotificationEntity.shouldPreserveAsPostedForRetainedTerminal(
+        cutoffTimestamp: Long
+    ): Boolean {
+        if (status != NotificationStatus.POSTED) {
+            return false
+        }
+
+        return notifications.any { notification ->
+            notification.notificationKey == notificationKey &&
+                notification.status != NotificationStatus.POSTED &&
+                notification.observedAt >= cutoffTimestamp &&
+                notification.id > id &&
+                hasNoInterveningLifecycleEvent(
+                    notificationKey = notificationKey,
+                    startExclusive = id,
+                    endExclusive = notification.id
+                )
+        }
+    }
+
+    private fun NotificationEntity.shouldPreserveAsTerminalForRetainedPosted(
+        retainedNewestIds: Set<Long>
+    ): Boolean {
+        if (status == NotificationStatus.POSTED) {
+            return false
+        }
+
+        return notifications.any { notification ->
+            notification.notificationKey == notificationKey &&
+                notification.status == NotificationStatus.POSTED &&
+                notification.id in retainedNewestIds &&
+                notification.id < id &&
+                hasNoInterveningLifecycleEvent(
+                    notificationKey = notificationKey,
+                    startExclusive = notification.id,
+                    endExclusive = id
+                )
+        }
+    }
+
+    private fun NotificationEntity.shouldPreserveAsPostedForRetainedTerminal(
+        retainedNewestIds: Set<Long>
+    ): Boolean {
+        if (status != NotificationStatus.POSTED) {
+            return false
+        }
+
+        return notifications.any { notification ->
+            notification.notificationKey == notificationKey &&
+                notification.status != NotificationStatus.POSTED &&
+                notification.id in retainedNewestIds &&
+                notification.id > id &&
+                hasNoInterveningLifecycleEvent(
+                    notificationKey = notificationKey,
+                    startExclusive = id,
+                    endExclusive = notification.id
+                )
+        }
+    }
+
+    private fun hasNoInterveningLifecycleEvent(
+        notificationKey: String,
+        startExclusive: Long,
+        endExclusive: Long
+    ): Boolean {
+        return notifications.none { notification ->
+            notification.notificationKey == notificationKey &&
+                notification.id > startExclusive &&
+                notification.id < endExclusive
         }
     }
 

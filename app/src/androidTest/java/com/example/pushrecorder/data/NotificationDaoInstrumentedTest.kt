@@ -19,6 +19,7 @@ import org.junit.runner.RunWith
 class NotificationDaoInstrumentedTest {
     private lateinit var database: AppDatabase
     private lateinit var notificationDao: NotificationDao
+    private lateinit var journalDao: NotificationEventJournalDao
 
     @Before
     fun setUp() {
@@ -27,6 +28,7 @@ class NotificationDaoInstrumentedTest {
             .allowMainThreadQueries()
             .build()
         notificationDao = database.notificationDao()
+        journalDao = database.notificationEventJournalDao()
     }
 
     @After
@@ -478,6 +480,83 @@ class NotificationDaoInstrumentedTest {
     }
 
     @Test
+    fun deleteOlderThanPrunesExpiredRemovedRowWithoutTreatingItAsActive() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "expired-removed-only",
+                title = "expired removed only",
+                status = NotificationStatus.REMOVED,
+                observedAt = 3_000L,
+                removedAt = 3_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "expired-active-posted",
+                title = "expired active posted",
+                observedAt = 4_000L
+            )
+        )
+
+        val deleted = notificationDao.deleteOlderThan(cutoffTimestamp = 5_000L)
+
+        assertEquals(1, deleted)
+        assertEquals(
+            listOf("expired active posted"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals(
+            listOf("expired active posted"),
+            notificationDao.getActiveNotifications().map { notification -> notification.title }
+        )
+    }
+
+    @Test
+    fun deleteOlderThanRetainsRowsAtCutoffAndDeletesRowsBeforeCutoff() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "before-cutoff",
+                title = "before cutoff posted",
+                observedAt = 4_998L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "before-cutoff",
+                title = "before cutoff removed",
+                status = NotificationStatus.REMOVED,
+                observedAt = 4_999L,
+                removedAt = 4_999L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "at-cutoff",
+                title = "at cutoff posted",
+                observedAt = 5_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "at-cutoff",
+                title = "at cutoff removed",
+                status = NotificationStatus.REMOVED,
+                observedAt = 5_000L,
+                removedAt = 5_000L
+            )
+        )
+
+        val deleted = notificationDao.deleteOlderThan(cutoffTimestamp = 5_000L)
+
+        assertEquals(2, deleted)
+        assertEquals(
+            listOf("at cutoff removed", "at cutoff posted"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals(emptyList<NotificationEntity>(), notificationDao.getActiveNotifications())
+    }
+
+    @Test
     fun deleteOlderThanDoesNotPreservePostedClosedByLaterTerminalInsertWithOlderObservedAt() = runBlocking {
         notificationDao.insert(
             notification(
@@ -568,6 +647,45 @@ class NotificationDaoInstrumentedTest {
     }
 
     @Test
+    fun deleteOlderThanPreservesActiveRepostOlderThanCutoffWhileDeletingExpiredHistory() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "reposted-key",
+                title = "expired posted",
+                observedAt = 1_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "reposted-key",
+                title = "expired removed",
+                status = NotificationStatus.REMOVED,
+                observedAt = 2_000L,
+                removedAt = 2_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "reposted-key",
+                title = "active repost older than cutoff",
+                observedAt = 3_000L
+            )
+        )
+
+        val deleted = notificationDao.deleteOlderThan(cutoffTimestamp = 5_000L)
+
+        assertEquals(2, deleted)
+        assertEquals(
+            listOf("active repost older than cutoff"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals(
+            "active repost older than cutoff",
+            notificationDao.getActiveNotificationByKey("reposted-key")?.title
+        )
+    }
+
+    @Test
     fun deleteOlderThanDoesNotKeepExpiredLifecycleBecauseOlderLifecycleWasRetained() = runBlocking {
         notificationDao.insert(
             notification(
@@ -610,6 +728,412 @@ class NotificationDaoInstrumentedTest {
             loadNotifications(query = "").map { notification -> notification.title }
         )
         assertEquals(emptyList<NotificationEntity>(), notificationDao.getActiveNotifications())
+    }
+
+    @Test
+    fun trimToNewestDeletesOldestInactiveRowsAndPreservesActiveRows() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-active",
+                title = "old active",
+                observedAt = 1_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-inactive",
+                title = "old inactive posted",
+                observedAt = 2_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-inactive",
+                title = "old inactive removed",
+                status = NotificationStatus.REMOVED,
+                observedAt = 3_000L,
+                removedAt = 3_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "new-inactive",
+                title = "new inactive removed",
+                status = NotificationStatus.REMOVED,
+                observedAt = 4_000L,
+                removedAt = 4_000L
+            )
+        )
+
+        val deleted = notificationDao.trimToNewest(maxRows = 2)
+
+        assertEquals(1, deleted)
+        assertEquals(
+            listOf("new inactive removed", "old inactive removed", "old active"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals("old active", notificationDao.getActiveNotificationByKey("old-active")?.title)
+    }
+
+    @Test
+    fun trimToNewestPrunesOverflowRemovedRowWithoutTreatingItAsActive() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-active",
+                title = "old active",
+                observedAt = 1L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "overflow-removed-only",
+                title = "overflow removed only",
+                status = NotificationStatus.REMOVED,
+                observedAt = 2L,
+                removedAt = 2L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "retained-removed-only",
+                title = "retained removed only",
+                status = NotificationStatus.REMOVED,
+                observedAt = 3L,
+                removedAt = 3L
+            )
+        )
+
+        val deleted = notificationDao.trimToNewest(maxRows = 1)
+
+        assertEquals(1, deleted)
+        assertEquals(
+            listOf("retained removed only", "old active"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals(
+            listOf("old active"),
+            notificationDao.getActiveNotifications().map { notification -> notification.title }
+        )
+    }
+
+    @Test
+    fun trimToNewestUsesAppendOrderInsteadOfObservedAtWhenChoosingOverflowRows() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-high-clock-1",
+                title = "old high clock 1",
+                status = NotificationStatus.REMOVED,
+                observedAt = 10_000L,
+                removedAt = 10_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-high-clock-2",
+                title = "old high clock 2",
+                status = NotificationStatus.REMOVED,
+                observedAt = 9_000L,
+                removedAt = 9_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "latest-append-1",
+                title = "latest append 1",
+                status = NotificationStatus.REMOVED,
+                observedAt = 100L,
+                removedAt = 100L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "latest-append-2",
+                title = "latest append 2",
+                status = NotificationStatus.REMOVED,
+                observedAt = 50L,
+                removedAt = 50L
+            )
+        )
+
+        val deleted = notificationDao.trimToNewest(maxRows = 2)
+
+        assertEquals(2, deleted)
+        assertEquals(
+            listOf("latest append 1", "latest append 2"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+    }
+
+    @Test
+    fun trimToNewestDoesNotDeleteWhenRowCountEqualsThreshold() = runBlocking {
+        (1..3).forEach { index ->
+            notificationDao.insert(
+                notification(
+                    notificationKey = "row-$index",
+                    title = "row $index",
+                    status = NotificationStatus.REMOVED,
+                    observedAt = index.toLong(),
+                    removedAt = index.toLong()
+                )
+            )
+        }
+
+        val deleted = notificationDao.trimToNewest(maxRows = 3)
+
+        assertEquals(0, deleted)
+        assertEquals(
+            listOf("row 3", "row 2", "row 1"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+    }
+
+    @Test
+    fun trimToNewestPreservesOverflowPostedRowForRetainedTerminal() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "closed-row-cap",
+                title = "posted partner",
+                observedAt = 1L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "unrelated-overflow",
+                title = "unrelated overflow",
+                status = NotificationStatus.REMOVED,
+                observedAt = 2L,
+                removedAt = 2L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "closed-row-cap",
+                title = "retained terminal",
+                status = NotificationStatus.REMOVED,
+                removalReason = RemovalReason.USER_DISMISSED,
+                observedAt = 3L,
+                removedAt = 3L
+            )
+        )
+
+        val deleted = notificationDao.trimToNewest(maxRows = 1)
+
+        assertEquals(1, deleted)
+        assertEquals(
+            listOf("retained terminal", "posted partner"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals(emptyList<NotificationEntity>(), notificationDao.getActiveNotifications())
+    }
+
+    @Test
+    fun trimToNewestPrunesOverflowPostedLifecycleWhenKeyIsReusedInsideRowCap() = runBlocking {
+        notificationDao.insert(
+            notification(
+                notificationKey = "reused-row-cap",
+                title = "old posted",
+                observedAt = 1L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "reused-row-cap",
+                title = "old removed",
+                status = NotificationStatus.REMOVED,
+                removalReason = RemovalReason.USER_DISMISSED,
+                observedAt = 2L,
+                removedAt = 2L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "reused-row-cap",
+                title = "active repost",
+                observedAt = 3L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "newest-terminal",
+                title = "newest terminal",
+                status = NotificationStatus.REMOVED,
+                observedAt = 4L,
+                removedAt = 4L
+            )
+        )
+
+        val deleted = notificationDao.trimToNewest(maxRows = 2)
+
+        assertEquals(2, deleted)
+        assertEquals(
+            listOf("newest terminal", "active repost"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals("active repost", notificationDao.getActiveNotificationByKey("reused-row-cap")?.title)
+    }
+
+    @Test
+    fun repositoryCleanupKeepsRetainedLifecyclePartnerAfterTimeAndRowCapCleanup() = runBlocking {
+        val repository = NotificationRepository(
+            notificationDao = notificationDao,
+            currentTimeMillis = { 10_000L },
+            retentionPolicy = NotificationRetentionPolicy(
+                maxAgeMillis = 5_000L,
+                maxRows = 2,
+                maxEvents = null
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "expired-lifecycle",
+                title = "expired posted",
+                observedAt = 1_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "expired-lifecycle",
+                title = "expired removed",
+                status = NotificationStatus.REMOVED,
+                observedAt = 2_000L,
+                removedAt = 2_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "cross-boundary",
+                title = "posted before cutoff",
+                observedAt = 4_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "cross-boundary",
+                title = "removed after cutoff",
+                status = NotificationStatus.REMOVED,
+                observedAt = 6_000L,
+                removedAt = 6_000L
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "newest-unrelated",
+                title = "newest unrelated",
+                status = NotificationStatus.REMOVED,
+                observedAt = 7_000L,
+                removedAt = 7_000L
+            )
+        )
+
+        val deleted = repository.deleteExpiredNotifications()
+
+        assertEquals(2, deleted)
+        assertEquals(
+            listOf("newest unrelated", "removed after cutoff", "posted before cutoff"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals(emptyList<NotificationEntity>(), notificationDao.getActiveNotifications())
+    }
+
+    @Test
+    fun repositoryCleanupUsesMaxEventsLimitAndPreservesActiveRows() = runBlocking {
+        val repository = NotificationRepository(
+            notificationDao = notificationDao,
+            currentTimeMillis = { 10_000L },
+            retentionPolicy = NotificationRetentionPolicy(
+                maxAgeMillis = null,
+                maxRows = null,
+                maxEvents = 2
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "old-active",
+                title = "old active",
+                observedAt = 1L
+            )
+        )
+        listOf("new-1", "new-2", "new-3").forEachIndexed { index, key ->
+            notificationDao.insert(
+                notification(
+                    notificationKey = key,
+                    title = key,
+                    status = NotificationStatus.REMOVED,
+                    observedAt = 2L + index,
+                    removedAt = 2L + index
+                )
+            )
+        }
+
+        val deleted = repository.deleteExpiredNotifications()
+
+        assertEquals(1, deleted)
+        assertEquals(
+            listOf("new-3", "new-2", "old active"),
+            loadNotifications(query = "").map { notification -> notification.title }
+        )
+        assertEquals("old active", notificationDao.getActiveNotificationByKey("old-active")?.title)
+    }
+
+    @Test
+    fun repositoryCleanupPrunesRestartReconciledLifecycleAfterTerminalAgesOut() = runBlocking {
+        var now = 10_000L
+        val repository = NotificationRepository(
+            notificationDao = notificationDao,
+            currentTimeMillis = { now },
+            retentionPolicy = NotificationRetentionPolicy(
+                maxAgeMillis = 5_000L,
+                maxRows = null,
+                maxEvents = null
+            )
+        )
+        notificationDao.insert(
+            notification(
+                notificationKey = "restart-active",
+                title = "posted before restart",
+                observedAt = 1_000L,
+                timestamp = 1_000L
+            )
+        )
+
+        assertEquals(0, repository.deleteExpiredNotifications())
+        assertEquals(
+            "posted before restart",
+            notificationDao.getActiveNotificationByKey("restart-active")?.title
+        )
+
+        repository.reconcileActiveNotifications(
+            activeNotificationKeys = emptySet(),
+            reconciledAt = now,
+            activeSnapshotCapturedAt = now
+        )
+        assertEquals(0, repository.deleteExpiredNotifications())
+        assertNull(notificationDao.getActiveNotificationByKey("restart-active"))
+        assertEquals(
+            listOf(NotificationStatus.REMOVED, NotificationStatus.POSTED),
+            loadNotifications(query = "").map { notification -> notification.status }
+        )
+
+        now = 16_000L
+
+        assertEquals(2, repository.deleteExpiredNotifications())
+        assertEquals(emptyList<NotificationEntity>(), loadNotifications(query = ""))
+    }
+
+    @Test
+    fun journalCleanupDeletesOldestExpiredAndOverflowEvents() = runBlocking {
+        journalDao.insert(journalEvent(notificationKey = "expired", createdAt = 1_000L))
+        journalDao.insert(journalEvent(notificationKey = "old-retained", createdAt = 2_000L))
+        journalDao.insert(journalEvent(notificationKey = "newer", createdAt = 3_000L))
+        journalDao.insert(journalEvent(notificationKey = "newest", createdAt = 4_000L))
+
+        val expiredDeleted = journalDao.deleteCreatedBefore(cutoffTimestamp = 2_000L)
+        val overflowDeleted = journalDao.trimToNewest(maxRows = 2)
+        val pending = journalDao.pendingEvents(now = 10_000L, limit = 10)
+
+        assertEquals(1, expiredDeleted)
+        assertEquals(1, overflowDeleted)
+        assertEquals(listOf("newer", "newest"), pending.map { event -> event.notificationKey })
     }
 
     @Test
@@ -706,6 +1230,28 @@ class NotificationDaoInstrumentedTest {
             removalReason = removalReason,
             timeToRemoval = (removedAt - timestamp).coerceAtLeast(0L),
             removedAt = removedAt
+        )
+    }
+
+    private fun journalEvent(
+        notificationKey: String,
+        createdAt: Long
+    ): NotificationEventJournalEntity {
+        return NotificationEventJournalEntity(
+            eventType = NotificationEventJournalEntity.TYPE_POSTED,
+            notificationKey = notificationKey,
+            packageName = "com.example.chat",
+            title = "title",
+            text = "text",
+            sourcePostTime = createdAt,
+            observedAt = createdAt,
+            flags = 0,
+            hasActions = false,
+            appLabel = "Chat",
+            appInfoResolved = true,
+            systemReason = null,
+            createdAt = createdAt,
+            nextAttemptAt = createdAt
         )
     }
 }

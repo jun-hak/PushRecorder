@@ -1,5 +1,6 @@
 package com.example.pushrecorder.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -8,7 +9,8 @@ import androidx.room.PrimaryKey
     tableName = "notification_event_journal",
     indices = [
         Index(value = ["notificationKey"]),
-        Index(value = ["createdAt"])
+        Index(value = ["createdAt"]),
+        Index(value = ["nextAttemptAt", "id"])
     ]
 )
 data class NotificationEventJournalEntity(
@@ -26,7 +28,13 @@ data class NotificationEventJournalEntity(
     val appLabel: String,
     val appInfoResolved: Boolean,
     val systemReason: Int?,
-    val createdAt: Long
+    val createdAt: Long,
+    @ColumnInfo(defaultValue = "0")
+    val retryCount: Int = 0,
+    val lastAttemptAt: Long? = null,
+    @ColumnInfo(defaultValue = "0")
+    val nextAttemptAt: Long = 0L,
+    val lastError: String? = null
 ) {
     companion object {
         const val TYPE_POSTED = "POSTED"

@@ -11,6 +11,7 @@ import com.example.pushrecorder.data.NotificationEntity
 import com.example.pushrecorder.data.NotificationGroupSummary
 import com.example.pushrecorder.data.NotificationRepository
 import com.example.pushrecorder.service.NotificationListenerStatusRepository
+import com.example.pushrecorder.service.NotificationStorageCleanupScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -47,6 +48,7 @@ class PushRecorderViewModel @Inject constructor(
     private val notificationRepository: NotificationRepository,
     private val appRegistryRepository: AppRegistryRepository,
     private val listenerStatusRepository: NotificationListenerStatusRepository,
+    private val storageCleanupScheduler: NotificationStorageCleanupScheduler,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
@@ -96,11 +98,11 @@ class PushRecorderViewModel @Inject constructor(
     init {
         listenerStatusRepository.refresh()
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                notificationRepository.deleteExpiredNotifications()
-            }.onFailure {
-                listenerStatusRepository.markError("Failed to delete expired notifications")
-            }
+            storageCleanupScheduler.runCleanup(
+                onFailure = {
+                    listenerStatusRepository.markError("Failed to clean notification storage")
+                }
+            )
 
             runCatching {
                 appRegistryRepository.syncInstalledApps()

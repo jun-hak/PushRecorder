@@ -55,6 +55,31 @@ class NotificationRepositoryTest {
     }
 
     @Test
+    fun recordPosted_truncatesOversizedTitleAndTextBeforePersistence() = runTest {
+        val oversizedTitle = "t".repeat(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH + 50)
+        val oversizedText = "x".repeat(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH + 50)
+
+        notificationDao.beforeInsert = { notification ->
+            assertEquals(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH, notification.title.length)
+            assertEquals(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH, notification.text.length)
+            assertEquals(oversizedTitle.take(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH), notification.title)
+            assertEquals(oversizedText.take(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH), notification.text)
+        }
+
+        repository.recordPosted(
+            notificationCapture(
+                notificationKey = "oversized-posted",
+                title = oversizedTitle,
+                text = oversizedText
+            )
+        )
+
+        val notification = notificationDao.notifications.single()
+        assertEquals(oversizedTitle.take(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH), notification.title)
+        assertEquals(oversizedText.take(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH), notification.text)
+    }
+
+    @Test
     fun recordRemoved_appendsTerminalEventWithoutUpdatingPostedRow() = runTest {
         repository.recordPosted(
             notificationCapture(
@@ -111,6 +136,35 @@ class NotificationRepositoryTest {
 
         assertEquals(1, notificationDao.notifications.size)
         assertEquals("removed", notificationDao.notifications.single().title)
+    }
+
+    @Test
+    fun recordRemoved_truncatesOversizedTitleAndTextBeforePersistence() = runTest {
+        val oversizedTitle = "r".repeat(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH + 50)
+        val oversizedText = "body".repeat(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH)
+
+        notificationDao.beforeInsert = { notification ->
+            assertEquals(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH, notification.title.length)
+            assertEquals(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH, notification.text.length)
+            assertEquals(oversizedTitle.take(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH), notification.title)
+            assertEquals(oversizedText.take(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH), notification.text)
+        }
+
+        repository.recordRemoved(
+            capture = notificationCapture(
+                notificationKey = "oversized-removed",
+                title = oversizedTitle,
+                text = oversizedText
+            ),
+            status = NotificationStatus.REMOVED,
+            removalReason = RemovalReason.USER_DISMISSED,
+            timeToRemoval = 1_000L,
+            removedAt = 2_000L
+        )
+
+        val notification = notificationDao.notifications.single()
+        assertEquals(oversizedTitle.take(NotificationStorageLimits.MAX_STORED_TITLE_LENGTH), notification.title)
+        assertEquals(oversizedText.take(NotificationStorageLimits.MAX_STORED_TEXT_LENGTH), notification.text)
     }
 
     @Test
@@ -236,6 +290,8 @@ class NotificationRepositoryTest {
             targetRows.map { notification -> notification.status }
         )
         assertEquals(3_000L, targetRows.single { it.status == NotificationStatus.REMOVED }.removedAt)
+        assertEquals(listOf("com.example.target"), notificationDao.activeNotificationsByPackageQueries)
+        assertEquals(0, notificationDao.activeNotificationsQueryCount)
 
         val otherRows = notificationDao.notifications.filter { notification ->
             notification.notificationKey == "other-stale-key"

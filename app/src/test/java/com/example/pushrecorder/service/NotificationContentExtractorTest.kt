@@ -210,6 +210,30 @@ class NotificationContentExtractorTest {
     }
 
     @Test
+    fun textFromContentCapsLargeExpandedBodyBeforeStorage() {
+        val longBody = "x".repeat(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH + 100)
+
+        val text = NotificationContentExtractor.textFromContent(
+            NotificationContentExtractor.TextContent(bigText = "  $longBody  ")
+        )
+
+        assertEquals(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH, text.length)
+        assertEquals("x".repeat(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH), text)
+    }
+
+    @Test
+    fun textFromContentCapsLargeMessagingTranscriptBeforeStorage() {
+        val longTranscript = "Alice: " + "ping".repeat(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH)
+
+        val text = NotificationContentExtractor.textFromContent(
+            NotificationContentExtractor.TextContent(messages = longTranscript)
+        )
+
+        assertEquals(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH, text.length)
+        assertEquals(longTranscript.take(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH), text)
+    }
+
+    @Test
     fun titleFromContentPrefersConversationTitle() {
         val title = NotificationContentExtractor.titleFromContent(
             NotificationContentExtractor.TitleContent(
@@ -287,5 +311,17 @@ class NotificationContentExtractorTest {
         )
 
         assertEquals("", title)
+    }
+
+    @Test
+    fun titleFromContentCapsLargeTitleBeforeStorage() {
+        val longTitle = "t".repeat(NotificationContentExtractor.MAX_STORED_TITLE_LENGTH + 100)
+
+        val title = NotificationContentExtractor.titleFromContent(
+            NotificationContentExtractor.TitleContent(title = "  $longTitle  ")
+        )
+
+        assertEquals(NotificationContentExtractor.MAX_STORED_TITLE_LENGTH, title.length)
+        assertEquals("t".repeat(NotificationContentExtractor.MAX_STORED_TITLE_LENGTH), title)
     }
 }

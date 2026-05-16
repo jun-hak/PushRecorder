@@ -31,6 +31,26 @@ class NotificationContentExtractorInstrumentedTest {
     }
 
     @Test
+    fun bigTextStyleCapsLargeExpandedTextBeforeStorage() {
+        val largeBody = "x".repeat(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH + 100)
+        val notification = baseBuilder()
+            .setContentTitle("Large body")
+            .setContentText("Short body")
+            .setStyle(Notification.BigTextStyle().bigText(largeBody))
+            .build()
+        val text = NotificationContentExtractor.text(notification)
+
+        assertEquals(
+            NotificationContentExtractor.MAX_STORED_TEXT_LENGTH,
+            text.length
+        )
+        assertEquals(
+            largeBody.take(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH),
+            text
+        )
+    }
+
+    @Test
     fun inboxStylePreservesAllVisibleLines() {
         val notification = baseBuilder()
             .setContentTitle("News")
@@ -75,6 +95,32 @@ class NotificationContentExtractorInstrumentedTest {
                 Bob: On my way
             """.trimIndent(),
             NotificationContentExtractor.text(notification)
+        )
+    }
+
+    @Test
+    fun messagingStyleCapsLargeTranscriptBeforeStorage() {
+        val me = Person.Builder().setName("Me").build()
+        val alice = Person.Builder().setName("Alice").build()
+        val largeMessage = "ping".repeat(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH)
+        val expectedTranscript = "Alice: $largeMessage"
+
+        val notification = baseBuilder()
+            .setStyle(
+                Notification.MessagingStyle(me)
+                    .setConversationTitle("Large chat")
+                    .addMessage(largeMessage, 1_000L, alice)
+            )
+            .build()
+        val text = NotificationContentExtractor.text(notification)
+
+        assertEquals(
+            NotificationContentExtractor.MAX_STORED_TEXT_LENGTH,
+            text.length
+        )
+        assertEquals(
+            expectedTranscript.take(NotificationContentExtractor.MAX_STORED_TEXT_LENGTH),
+            text
         )
     }
 

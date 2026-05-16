@@ -35,8 +35,12 @@ class NotificationListenerService : AndroidNotificationListenerService() {
     @Inject
     lateinit var notificationEventJournalRepository: NotificationEventJournalRepository
 
+    @Inject
+    lateinit var storageCleanupScheduler: NotificationStorageCleanupScheduler
+
     private val serviceJob = SupervisorJob()
-    private val scope = CoroutineScope(serviceJob + Dispatchers.IO)
+    private val serviceDispatcher = Dispatchers.IO
+    private val scope = CoroutineScope(serviceJob + serviceDispatcher)
     private val shutdownCompleted = AtomicBoolean(false)
     private val eventQueue: NotificationProcessingQueue by lazy {
         NotificationProcessingQueue(
@@ -47,6 +51,16 @@ class NotificationListenerService : AndroidNotificationListenerService() {
             onFailed = { event, error ->
                 val message = "Failed to process ${event.eventName()}"
                 listenerStatusRepository.markEventFailed(message)
+                runCatching {
+                    notificationEventJournalRepository.markProcessingFailed(event, error)
+                }.onSuccess { retryDelayMillis ->
+                    retryDelayMillis?.let { delayMillis ->
+                        durableEventEnqueuer.replayPendingEventsAfter(delayMillis)
+                    }
+                }.onFailure { retryStateError ->
+                    listenerStatusRepository.markError("Failed to update notification event retry state")
+                    Log.e(TAG, "Failed to update notification event retry state: $event", retryStateError)
+                }
                 Log.e(TAG, "Failed to process notification event: $event", error)
             },
             onRejected = { event, message, error ->
@@ -57,6 +71,8 @@ class NotificationListenerService : AndroidNotificationListenerService() {
     }
     private val durableEventEnqueuer: NotificationDurableEventEnqueuer by lazy {
         NotificationDurableEventEnqueuer(
+            scope = scope,
+            dispatcher = serviceDispatcher,
             journalRepository = notificationEventJournalRepository,
             enqueueCommand = { event -> eventQueue.enqueue(event) },
             statusRecorder = listenerStatusRepository,
@@ -98,8 +114,9 @@ class NotificationListenerService : AndroidNotificationListenerService() {
         super.onCreate()
         listenerStatusRepository.markServiceStarted()
         eventQueue.start()
+        durableEventEnqueuer.start()
         durableEventEnqueuer.replayPendingEvents()
-        cleanupOldNotifications()
+        requestStorageCleanup(force = true)
         syncInstalledApps()
     }
 
@@ -121,8 +138,10 @@ class NotificationListenerService : AndroidNotificationListenerService() {
 
     override fun onDestroy() {
         listenerStatusRepository.markServiceStopped()
-        eventQueue.closeAndDrain {
-            completeShutdownIfDrained()
+        durableEventEnqueuer.closeAndDrain {
+            eventQueue.closeAndDrain {
+                completeShutdownIfDrained()
+            }
         }
         super.onDestroy()
     }
@@ -154,6 +173,7 @@ class NotificationListenerService : AndroidNotificationListenerService() {
     private suspend fun processQueuedEvent(event: NotificationProcessingCommand) {
         processEvent(event)
         notificationEventJournalRepository.acknowledge(event)
+        requestStorageCleanup()
     }
 
     private suspend fun processForegroundEvent(event: NotificationProcessingCommand) {
@@ -171,15 +191,15 @@ class NotificationListenerService : AndroidNotificationListenerService() {
         durableEventEnqueuer.enqueue(event)
     }
 
-    private fun cleanupOldNotifications() {
-        scope.launch {
-            runCatching {
-                notificationRepository.deleteExpiredNotifications()
-            }.onFailure { error ->
-                listenerStatusRepository.markError("Failed to delete expired notifications")
-                Log.e(TAG, "Failed to delete expired notifications", error)
+    private fun requestStorageCleanup(force: Boolean = false) {
+        storageCleanupScheduler.requestCleanup(
+            scope = scope,
+            force = force,
+            onFailure = { error ->
+                listenerStatusRepository.markError("Failed to clean notification storage")
+                Log.e(TAG, "Failed to clean notification storage", error)
             }
-        }
+        )
     }
 
     private fun syncInstalledApps() {

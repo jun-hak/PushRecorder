@@ -3,18 +3,22 @@ package com.example.pushrecorder.service
 import com.example.pushrecorder.data.NotificationCapture
 import com.example.pushrecorder.data.NotificationEventJournalDao
 import com.example.pushrecorder.data.NotificationEventJournalEntity
+import com.example.pushrecorder.data.NotificationEventJournalRetentionPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class NotificationEventJournalRepository internal constructor(
     private val journalDao: NotificationEventJournalDao,
-    private val currentTimeMillis: () -> Long
+    private val currentTimeMillis: () -> Long,
+    private val retentionPolicy: NotificationEventJournalRetentionPolicy =
+        NotificationEventJournalRetentionPolicy.Default
 ) {
     @Inject
     constructor(journalDao: NotificationEventJournalDao) : this(
         journalDao = journalDao,
-        currentTimeMillis = System::currentTimeMillis
+        currentTimeMillis = System::currentTimeMillis,
+        retentionPolicy = NotificationEventJournalRetentionPolicy.Default
     )
 
     suspend fun journalIfRequired(
@@ -26,14 +30,17 @@ class NotificationEventJournalRepository internal constructor(
 
         val journalId = journalDao.insert(command.toJournalEntity(createdAt = currentTimeMillis()))
         if (journalId <= 0L) {
-            return command
+            error("Failed to persist notification event journal for ${command.eventName()}")
         }
 
         return command.withEventJournalId(journalId)
     }
 
     suspend fun pendingEvents(): List<NotificationProcessingCommand> {
-        return journalDao.pendingEvents().mapNotNull { entity ->
+        return journalDao.pendingEvents(
+            now = currentTimeMillis(),
+            limit = retentionPolicy.replayBatchSize
+        ).mapNotNull { entity ->
             entity.toProcessingCommand()
         }
     }
@@ -41,6 +48,35 @@ class NotificationEventJournalRepository internal constructor(
     suspend fun acknowledge(command: NotificationProcessingCommand) {
         val journalId = command.eventJournalId ?: return
         journalDao.deleteById(journalId)
+    }
+
+    suspend fun markProcessingFailed(
+        command: NotificationProcessingCommand,
+        error: Throwable
+    ): Long? {
+        val journalId = command.eventJournalId ?: return null
+        val nextRetryCount = (journalDao.retryCountForId(journalId) ?: return null) + 1
+        val now = currentTimeMillis()
+        val nextAttemptAt = retentionPolicy.nextAttemptTimestamp(
+            retryCount = nextRetryCount,
+            now = now
+        )
+        journalDao.markAttemptFailed(
+            id = journalId,
+            retryCount = nextRetryCount,
+            lastAttemptAt = now,
+            nextAttemptAt = nextAttemptAt,
+            lastError = error.message?.take(MAX_LAST_ERROR_LENGTH)
+        )
+        return (nextAttemptAt - now).coerceAtLeast(0L)
+    }
+
+    suspend fun deleteExpiredPendingEvents(): Int {
+        val ageDeleted = journalDao.deleteCreatedBefore(
+            retentionPolicy.cutoffTimestamp(currentTimeMillis())
+        )
+        val countDeleted = journalDao.trimToNewest(retentionPolicy.maxPendingRows)
+        return ageDeleted + countDeleted
     }
 
     private fun NotificationProcessingCommand.toJournalEntity(
@@ -79,7 +115,8 @@ class NotificationEventJournalRepository internal constructor(
             appLabel = appLabel,
             appInfoResolved = appInfoResolved,
             systemReason = systemReason,
-            createdAt = createdAt
+            createdAt = createdAt,
+            nextAttemptAt = createdAt
         )
     }
 
@@ -111,5 +148,9 @@ class NotificationEventJournalRepository internal constructor(
             )
             else -> null
         }
+    }
+
+    private companion object {
+        const val MAX_LAST_ERROR_LENGTH = 512
     }
 }

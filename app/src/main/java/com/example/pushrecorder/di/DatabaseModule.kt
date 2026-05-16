@@ -5,6 +5,7 @@ import com.example.pushrecorder.data.AppRecordDao
 import com.example.pushrecorder.data.AppDatabase
 import com.example.pushrecorder.data.NotificationEventJournalDao
 import com.example.pushrecorder.data.NotificationDao
+import com.example.pushrecorder.data.NotificationRetentionPolicy
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -28,6 +29,12 @@ object DatabaseModule {
     @Singleton
     fun provideNotificationDao(database: AppDatabase): NotificationDao {
         return database.notificationDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideNotificationRetentionPolicy(): NotificationRetentionPolicy {
+        return NotificationRetentionPolicy.Default
     }
 
     @Provides

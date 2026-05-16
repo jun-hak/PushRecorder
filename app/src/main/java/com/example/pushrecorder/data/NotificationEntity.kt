@@ -9,9 +9,15 @@ import androidx.room.PrimaryKey
     tableName = "notifications",
     indices = [
         Index(value = ["notificationKey"]),
+        Index(value = ["notificationKey", "id"]),
+        Index(value = ["notificationKey", "status", "id"]),
         Index(value = ["packageName", "observedAt"]),
+        Index(value = ["packageName", "observedAt", "id"]),
+        Index(value = ["packageName", "id"]),
+        Index(value = ["packageName", "status", "notificationKey", "id"]),
         Index(value = ["observedAt"]),
         Index(value = ["status"]),
+        Index(value = ["status", "notificationKey", "id"]),
         Index(value = ["eventJournalId"], unique = true)
     ]
 )
