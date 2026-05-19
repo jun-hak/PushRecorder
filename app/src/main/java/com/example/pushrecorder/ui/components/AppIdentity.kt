@@ -25,8 +25,11 @@ fun AppIdentity(
     modifier: Modifier = Modifier,
     supportingText: String? = null,
     iconSize: Dp = 40.dp,
+    showPackageName: Boolean = true,
     trailing: @Composable (() -> Unit)? = null
 ) {
+    val displayLabel = appInfo.label.ifBlank { appInfo.packageName }
+
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
@@ -40,12 +43,12 @@ fun AppIdentity(
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = appInfo.label,
+                text = displayLabel,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (appInfo.isResolved) {
+            if (showPackageName && appInfo.isResolved) {
                 Text(
                     text = appInfo.packageName,
                     style = MaterialTheme.typography.labelSmall,
@@ -73,6 +76,7 @@ private fun AppIcon(
     iconSize: Dp,
     modifier: Modifier = Modifier
 ) {
+    val displayLabel = appInfo.label.ifBlank { appInfo.packageName }
     val density = LocalDensity.current
     val iconSizePx = with(density) { iconSize.roundToPx() }
     val imageBitmap = remember(appInfo.packageName, appInfo.icon, iconSizePx) {
@@ -84,7 +88,7 @@ private fun AppIcon(
     if (imageBitmap != null) {
         Image(
             bitmap = imageBitmap,
-            contentDescription = "${appInfo.label} 아이콘",
+            contentDescription = "$displayLabel 아이콘",
             modifier = modifier.clip(CircleShape)
         )
     } else {
@@ -95,7 +99,7 @@ private fun AppIcon(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = appInfo.label.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                text = displayLabel.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

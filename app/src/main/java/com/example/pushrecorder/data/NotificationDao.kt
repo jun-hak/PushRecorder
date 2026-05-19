@@ -2,6 +2,7 @@ package com.example.pushrecorder.data
 
 import androidx.room.*
 import androidx.paging.PagingSource
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NotificationDao {
@@ -76,6 +77,19 @@ interface NotificationDao {
         packageName: String,
         query: String
     ): PagingSource<Int, NotificationEntity>
+
+    @Query("""
+        SELECT *
+        FROM notifications
+        WHERE notificationKey = :notificationKey
+            AND id >= :selectedId
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    fun observeLatestNotificationForDetail(
+        notificationKey: String,
+        selectedId: Long
+    ): Flow<NotificationEntity?>
 
     @Query("""
         SELECT *

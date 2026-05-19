@@ -39,8 +39,27 @@ enum class NotificationViewMode {
 data class PushRecorderUiState(
     val viewMode: NotificationViewMode = NotificationViewMode.ALL,
     val searchQuery: String = "",
-    val selectedPackageName: String? = null
+    val selectedPackageName: String? = null,
+    val isStatusCardCollapsed: Boolean = true,
+    val selectedNotification: NotificationEntity? = null,
+    val selectedNotificationAppInfoSnapshot: NotificationAppInfoSnapshot? = null
 )
+
+data class NotificationAppInfoSnapshot(
+    val packageName: String,
+    val label: String,
+    val isResolved: Boolean
+) {
+    companion object {
+        fun fromNotification(notification: NotificationEntity): NotificationAppInfoSnapshot {
+            return NotificationAppInfoSnapshot(
+                packageName = notification.packageName,
+                label = notification.appLabel.ifBlank { notification.packageName },
+                isResolved = notification.appInfoResolved
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
@@ -55,7 +74,8 @@ class PushRecorderViewModel @Inject constructor(
         PushRecorderUiState(
             viewMode = savedStateHandle.restoreViewMode(),
             searchQuery = savedStateHandle[KEY_SEARCH_QUERY] ?: "",
-            selectedPackageName = savedStateHandle[KEY_SELECTED_PACKAGE]
+            selectedPackageName = savedStateHandle[KEY_SELECTED_PACKAGE],
+            isStatusCardCollapsed = savedStateHandle[KEY_STATUS_CARD_COLLAPSED] ?: true
         )
     )
     val uiState = _uiState.asStateFlow()
@@ -94,6 +114,22 @@ class PushRecorderViewModel @Inject constructor(
                 }
             }
             .cachedIn(viewModelScope)
+
+    val selectedNotificationDetail: Flow<NotificationEntity?> = uiState
+        .map { it.selectedNotification }
+        .distinctUntilChanged()
+        .flatMapLatest { selectedNotification ->
+            if (selectedNotification == null) {
+                flowOf(null)
+            } else {
+                notificationRepository.observeNotificationDetail(
+                    notificationKey = selectedNotification.notificationKey,
+                    selectedId = selectedNotification.id
+                ).map { latestNotification ->
+                    latestNotification ?: selectedNotification
+                }
+            }
+        }
 
     init {
         listenerStatusRepository.refresh()
@@ -146,6 +182,31 @@ class PushRecorderViewModel @Inject constructor(
         savedStateHandle.remove<String>(KEY_SELECTED_PACKAGE)
     }
 
+    fun setStatusCardCollapsed(isCollapsed: Boolean) {
+        _uiState.update { state ->
+            state.copy(isStatusCardCollapsed = isCollapsed)
+        }
+        savedStateHandle[KEY_STATUS_CARD_COLLAPSED] = isCollapsed
+    }
+
+    fun selectNotification(notification: NotificationEntity) {
+        _uiState.update { state ->
+            state.copy(
+                selectedNotification = notification,
+                selectedNotificationAppInfoSnapshot = NotificationAppInfoSnapshot.fromNotification(notification)
+            )
+        }
+    }
+
+    fun clearSelectedNotification() {
+        _uiState.update { state ->
+            state.copy(
+                selectedNotification = null,
+                selectedNotificationAppInfoSnapshot = null
+            )
+        }
+    }
+
     suspend fun resolveAppInfo(packageName: String): AppDisplayInfo {
         appInfoCache[packageName]?.let { cachedInfo ->
             return cachedInfo
@@ -163,6 +224,7 @@ class PushRecorderViewModel @Inject constructor(
         private const val KEY_VIEW_MODE = "viewMode"
         private const val KEY_SEARCH_QUERY = "searchQuery"
         private const val KEY_SELECTED_PACKAGE = "selectedPackageName"
+        private const val KEY_STATUS_CARD_COLLAPSED = "isStatusCardCollapsed"
     }
 }
 

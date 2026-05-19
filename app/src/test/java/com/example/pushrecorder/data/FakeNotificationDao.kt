@@ -1,6 +1,8 @@
 package com.example.pushrecorder.data
 
 import androidx.paging.PagingSource
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -74,6 +76,22 @@ class FakeNotificationDao : NotificationDao {
             searchNotifications(query.toLiteralSearchTerm())
                 .filter { notification -> notification.packageName == packageName }
         )
+    }
+
+    override fun observeLatestNotificationForDetail(
+        notificationKey: String,
+        selectedId: Long
+    ): Flow<NotificationEntity?> {
+        return flow {
+            emit(
+                notifications
+                    .filter { notification ->
+                        notification.notificationKey == notificationKey &&
+                            notification.id >= selectedId
+                    }
+                    .maxByOrNull { notification -> notification.id }
+            )
+        }
     }
 
     override suspend fun getActiveNotificationByKey(notificationKey: String): NotificationEntity? {

@@ -50,6 +50,16 @@ class NotificationRepository internal constructor(
         }.flow
     }
 
+    fun observeNotificationDetail(
+        notificationKey: String,
+        selectedId: Long
+    ): Flow<NotificationEntity?> {
+        return notificationDao.observeLatestNotificationForDetail(
+            notificationKey = notificationKey,
+            selectedId = selectedId
+        )
+    }
+
     suspend fun getActiveNotificationByKey(notificationKey: String): NotificationEntity? {
         return notificationDao.getActiveNotificationByKey(notificationKey)
     }
